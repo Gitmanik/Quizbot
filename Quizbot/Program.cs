@@ -1,8 +1,6 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using NLog;
-using NLog.Config;
-using NLog.Targets;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
@@ -10,11 +8,9 @@ using Quizbot.Helpers;
 using SeleniumExtras.WaitHelpers;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
-using System.Net;
 using System.Net.Http;
-using System.Reflection;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,7 +21,6 @@ namespace Quizbot
     class Program
     {
         private static readonly Logger Logger = LogManager.GetLogger("Quizbot");
-        private static Regex pRegex = new Regex("<p>(.*)</p>");
         private static Random random = new Random();
 
         private const string Path = "QuizbotConfig.json";
@@ -63,7 +58,7 @@ namespace Quizbot
             string needs_login;
             do
             {
-                Console.Write($"Quiz wymaga logowania? (Tt/Nn, {(config.credentials.needs_login ? "T" : "N")}),  >>"); 
+                Console.Write($"Quiz wymaga logowania? (Tt/Nn, {(config.credentials.needs_login ? "T" : "N")}),  >>");
                 needs_login = Console.ReadLine().ToUpper();
             } while (needs_login != "" && needs_login != "T" && needs_login != "N");
 
@@ -80,8 +75,9 @@ namespace Quizbot
             ChromeOptions options = new ChromeOptions();
             options.SetLoggingPreference("performance", OpenQA.Selenium.LogLevel.All);
             options.AddArgument("mute-audio");
+
             driver = new ChromeDriver(options);
-            waiter = new WebDriverWait(driver, TimeSpan.FromSeconds(10));
+            waiter = new WebDriverWait(driver, TimeSpan.FromSeconds(999999));
 
             Logger.Debug("Przechodzenie na Quizizz");
             driver.Navigate().GoToUrl("https://quizizz.com/join/");
@@ -103,44 +99,50 @@ namespace Quizbot
                 Click(".login-submit-btn");
             }
 
-            //Przed wejściem do lobby (lub grą)
             Wait(".enter-name-field");
-            if (!config.credentials.needs_login)
+            if (!config.credentials.needs_login || config.force_name)
             {
                 Write(".enter-name-field", config.nickname);
             }
 
-
-            //Wchodzenie do lobby (lub gry)
             Logger.Debug("Wchodzenie do lobby/gry");
             Click(".start-game");
 
             await Task.Delay(2000);
 
+            Logger.Debug("Uzyskiwanie odpowiedzi");
             string gameid = QuizizzHelper.GetQuizizzGameID();
-            Logger.Debug($"GameID: {gameid}");
+            Logger.Trace($"GameID: {gameid}");
+
+            AnswersRoot answers = JsonConvert.DeserializeObject<AnswersRoot>(await QuizizzHelper.RequestQuizizzAnswers(gameid));
+            Logger.Info($"Nazwa Quizu: {answers.data.quiz.info.name}, ilość pytań: {answers.data.quiz.info.questions.Count}");
+
+            PrintAnswers(answers, true);
 
             Logger.Info("Oczekiwanie na rozpoczęcie gry");
 
-            new WebDriverWait(driver, TimeSpan.FromSeconds(99999)).Until(ExpectedConditions.VisibilityOfAllElementsLocatedBy(By.CssSelector(".question-text-color")));
+            Wait(".question-text-color");
 
             Logger.Info("Gra rozpoczęta");
-            Logger.Debug("Uzyskiwanie odpowiedzi");
-            AnswersRoot answers = JsonConvert.DeserializeObject<AnswersRoot>(await QuizizzHelper.RequestQuizizzAnswers(gameid));
 
-            Logger.Info($"Nazwa Quizu: {answers.data.quiz.info.name}, ilość pytań: {answers.data.quiz.info.questions.Count}");
-            PrintAnswers(answers, true);
             for (int idx = 0; idx < answers.data.quiz.info.questions.Count; idx++)
             {
                 Wait(".question-text-color");
                 Wait(".options-container");
-                Thread.Sleep(200);
-                string quizizz_question = ClearRegex(driver.FindElement(By.CssSelector(".question-text-color")).GetAttribute("innerHTML").Replace("&nbsp;", " "));
+                waiter.Until(ExpectedConditions.InvisibilityOfElementLocated(By.CssSelector(".dummy-content")));
+                try
+                {
+                    driver.FindElement(By.CssSelector(".powerup-onboarding-button"));
+                    Click(".powerup-onboarding-button");
+                }
 
-                Question found_question = answers.data.quiz.info.questions.Find(x => ClearRegex(x.structure.query.text).Equals(quizizz_question));
+                catch (NoSuchElementException) { }
+                string quizizz_question = driver.FindElement(By.CssSelector(".question-text-color")).GetAttribute("innerHTML").Replace("&nbsp;", " ");
 
-                Logger.Debug($"Wykryte pytanie: {quizizz_question}");
-                Logger.Debug($"Odnalezione pytanie? {(found_question != null ? "TAK" : "NIE")}");
+                Question found_question = answers.data.quiz.info.questions.Find(x => x.structure.query.text.Equals(quizizz_question));
+
+                Logger.Trace($"Wykryte pytanie: {quizizz_question}");
+                Logger.Trace($"Odnalezione pytanie? {(found_question != null ? "TAK" : "NIE")}");
 
                 if (found_question == null)
                 {
@@ -167,11 +169,13 @@ namespace Quizbot
                             Console.ReadLine();
                             Logger.Info("Wznawianie pracy");
                             break;
-
                     }
-                }
 
+                }
+                if (config.rush_quiz)
+                    WaitUntilInsisible(".dummy-content");
             }
+
             Logger.Warn("Koniec :)");
             new ManualResetEvent(false).WaitOne();
         }
@@ -198,7 +202,7 @@ namespace Quizbot
                         Option x = question.structure.options[adxxx];
 
                         if (x.type == "text")
-                            answers.Add(ClearRegex(x.text));
+                            answers.Add(x.text);
                         else if (x.type == "image")
                             answers.Add(x.media[0].url);
                     }
@@ -219,25 +223,33 @@ namespace Quizbot
         {
             List<string> answers = GetAnswers(found_question);
 
-            Logger.Info($"Pytanie: {ClearRegex(found_question.structure.query.text)} - {string.Join(", ", answers)}");
-            Logger.Warn("Wpisz odpowiedź i Wciśnij dowolny klawisz NA NASTĘPNYM PYTANIU : )");
-            Console.Read();
+            Logger.Info($"Pytanie: {found_question.structure.query.text} - {string.Join(", ", answers)}");
+            Write(".typed-option-input", answers[0]);
+            if (!config.rush_quiz)
+            {
+                Logger.Warn("Wciśnij ENTER na nastepnym pytaniu");
+                Console.ReadLine();
+            }
+            else
+            {
+                Wait(".submit-button");
+                Click(".submit-button");
+            }
         }
 
         private static void HandleClickable(Question found_question)
         {
             List<string> answers = new List<string>(GetAnswers(found_question));
 
-            Logger.Info($"Pytanie: {ClearRegex(found_question.structure.query.text)} - {string.Join(", ", answers)}");
+            Logger.Info($"Pytanie: {found_question.structure.query.text} - {string.Join(", ", answers)}");
 
             foreach (IWebElement e in driver.FindElement(By.CssSelector(".options-container")).FindElements(By.CssSelector(".option")))
             {
-                waiter.Until(ExpectedConditions.InvisibilityOfElementLocated(By.CssSelector(".dummy-content")));
                 try
                 {
-                    if (answers.Contains(ClearRegex(e.FindElement(By.CssSelector(".resizeable")).GetAttribute("innerHTML"))))
+                    if (answers.Contains(e.FindElement(By.CssSelector(".resizeable")).GetAttribute("innerHTML")))
                     {
-                        Logger.Info($"Zaznaczono tekst: {ClearRegex(e.FindElement(By.CssSelector(".resizeable")).GetAttribute("innerHTML"))}");
+                        Logger.Info($"Zaznaczono tekst: {e.FindElement(By.CssSelector(".resizeable")).GetAttribute("innerHTML")}");
                         e.Click();
                     }
                 }
@@ -260,7 +272,8 @@ namespace Quizbot
                 Click(".submit-button");
             }
 
-            if (config.random_delay)
+
+            if (!config.rush_quiz)
             {
                 int x = random.Next(10, 15);
                 Logger.Debug($"Oczekiwanie {x} sekund");
@@ -270,32 +283,41 @@ namespace Quizbot
 
         private static void PrintAnswers(AnswersRoot a, bool tofile = false)
         {
-            string p = "\n\nOdpowiedzi:\n";
+            string filename = $"odpowiedzi/QUIZIZZ_ODPOWIEDZI_{new Regex("[^a-zA-Z0-9\\.\\-]").Replace(a.data.quiz.info.name, "_")}.html";
+            string p = "" +
+                "<!DOCTYPE html>" +
+                "<html>" +
+                "<style> p { display: inline } </style>" +
+                "<head>" +
+                "<meta charset=\"UTF-8\">" +
+                "</head>" +
+                "<body>";
 
             foreach (Question q in a.data.quiz.info.questions)
             {
-                p += $"{ClearRegex(q.structure.query.text)}: {string.Join(", ", GetAnswers(q))}\n\n";
+                Logger.Info(q.structure.query.text);
+                p += $"<b>{q.structure.query.text}</b>: {string.Join(", ", GetAnswers(q))}\n<hr>\n";
             }
-
+            p += "</body></html>";
             if (tofile)
-                File.WriteAllText($"odpowiedzi/QUIZIZZ_ODPOWIEDZI_{new Regex("[^a-zA-Z0-9\\.\\-]").Replace(a.data.quiz.info.name, "_")}.txt", p);
+            {
+                File.WriteAllText(filename, p);
+                Process.Start(Directory.GetCurrentDirectory() + "/" + filename);
+            }
 
             Console.WriteLine(p);
         }
-
-
-
-        private static string ClearRegex(string x) => pRegex.Match(x).Groups[1].Value;
         private static void Write(string selector, string text) => driver.FindElement(By.CssSelector(selector)).SendKeys(text);
         private static void Click(string selector) => driver.FindElement(By.CssSelector(selector)).Click();
         private static void Wait(string selector) => waiter.Until(ExpectedConditions.VisibilityOfAllElementsLocatedBy(By.CssSelector(selector)));
-
+        private static void WaitUntilInsisible(string selector) => waiter.Until(ExpectedConditions.InvisibilityOfElementLocated(By.CssSelector(selector)));
     }
 
 
     public class BotConfig
     {
-        public bool random_delay = true;
+        public bool force_name;
+        public bool rush_quiz = false;
         public string nickname = "hello";
         public Credentials credentials = new Credentials();
 

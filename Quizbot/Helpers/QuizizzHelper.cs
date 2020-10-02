@@ -2,6 +2,7 @@
 using OpenQA.Selenium;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -20,6 +21,8 @@ namespace Quizbot.Helpers
             Logger.Trace($"Getting Answers from {x}");
             string responseString = await (await Program.httpClient.GetAsync(x)).Content.ReadAsStringAsync();
             Logger.Trace(responseString);
+
+            //return File.ReadAllText("force.txt");
             return responseString;
         }
         public static string GetQuizizzGameID()
