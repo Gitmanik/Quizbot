@@ -30,6 +30,21 @@ namespace Quizbot
 
         public static HttpClient httpClient;
 
+        private static bool Hamachi(bool x)
+        {
+            Process p = new Process
+            {
+                StartInfo =
+            {
+                FileName = "netsh.exe",
+                Arguments = $"interface set interface \"Hamachi\" {(x ? "enable" : "disable")}",
+                UseShellExecute = false,
+                RedirectStandardOutput = true
+            }
+            };
+            return p.Start();
+        }
+
         public static async Task Main()
         {
             NLogManager.ConfigureNLog();
@@ -44,6 +59,25 @@ namespace Quizbot
 
             if (File.Exists(Path))
                 config = JsonConvert.DeserializeObject<BotConfig>(File.ReadAllText(Path));
+
+            //if (File.Exists("force.txt"))
+            //{
+            //    Room a = QuizizzHelper.RequestQuizizzAnswers();
+            //    Console.WriteLine(a);
+            //    Console.ReadLine();
+            //    PrintAnswers(a, false);
+            //    return;
+            //}
+
+
+            Logger.Info("Wylaczanie Hamachi");
+            Logger.Info("PAMIETAJ O HAMACHI SPRAWDZ TERAZ I WYLACZ");
+            bool hamachi = Hamachi(false);
+            if (!hamachi)
+            {
+                Logger.Fatal("Blad podczas wylaczania Hamachi!!");
+                return; 
+            }
 
             Logger.Info("Uruchamianie Quizbot");
             Logger.Debug("Nick: " + config.nickname);
@@ -111,11 +145,10 @@ namespace Quizbot
             await Task.Delay(2000);
 
             Logger.Debug("Uzyskiwanie odpowiedzi");
-            string gameid = QuizizzHelper.GetQuizizzGameID();
-            Logger.Trace($"GameID: {gameid}");
 
-            AnswersRoot answers = JsonConvert.DeserializeObject<AnswersRoot>(await QuizizzHelper.RequestQuizizzAnswers(gameid));
-            Logger.Info($"Nazwa Quizu: {answers.data.quiz.info.name}, ilość pytań: {answers.data.quiz.info.questions.Count}");
+            Room answers = QuizizzHelper.RequestQuizizzAnswers();
+
+            Logger.Info($"Nazwa Quizu: {answers.name}, ilość pytań: {answers.questions.Count}");
 
             PrintAnswers(answers, true);
 
@@ -123,58 +156,61 @@ namespace Quizbot
 
             Wait(".question-text-color");
 
+            Logger.Info("Oczekiwanie na wciśnięcie ENTER");
+            Console.ReadLine();
+
             Logger.Info("Gra rozpoczęta");
 
-            for (int idx = 0; idx < answers.data.quiz.info.questions.Count; idx++)
-            {
-                Wait(".question-text-color");
-                Wait(".options-container");
-                waiter.Until(ExpectedConditions.InvisibilityOfElementLocated(By.CssSelector(".dummy-content")));
-                try
-                {
-                    driver.FindElement(By.CssSelector(".powerup-onboarding-button"));
-                    Click(".powerup-onboarding-button");
-                }
+            //for (int idx = 0; idx < answers.data.quiz.info.questions.Count; idx++)
+            //{
+            //    Wait(".question-text-color");
+            //    Wait(".options-container");
+            //    waiter.Until(ExpectedConditions.InvisibilityOfElementLocated(By.CssSelector(".dummy-content")));
+            //    try
+            //    {
+            //        driver.FindElement(By.CssSelector(".powerup-onboarding-button"));
+            //        Click(".powerup-onboarding-button");
+            //    }
 
-                catch (NoSuchElementException) { }
-                string quizizz_question = driver.FindElement(By.CssSelector(".question-text-color")).GetAttribute("innerHTML").Replace("&nbsp;", " ");
+            //    catch (NoSuchElementException) { }
+            //    string quizizz_question = driver.FindElement(By.CssSelector(".question-text-color")).GetAttribute("innerHTML").Replace("&nbsp;", " ");
 
-                Question found_question = answers.data.quiz.info.questions.Find(x => x.structure.query.text.Equals(quizizz_question));
+            //    Question found_question = answers.data.quiz.info.questions.Find(x => x.structure.query.text.Equals(quizizz_question));
 
-                Logger.Trace($"Wykryte pytanie: {quizizz_question}");
-                Logger.Trace($"Odnalezione pytanie? {(found_question != null ? "TAK" : "NIE")}");
+            //    Logger.Trace($"Wykryte pytanie: {quizizz_question}");
+            //    Logger.Trace($"Odnalezione pytanie? {(found_question != null ? "TAK" : "NIE")}");
 
-                if (found_question == null)
-                {
-                    Logger.Error("NIE DOPASOWANO PYTANIA! ODPOWIEDZ I WCIŚNIJ enter ABY KONTYNUOWAĆ..");
-                    PrintAnswers(answers);
-                    Console.ReadLine();
-                    Logger.Info("Wznawianie pracy");
-                }
-                else
-                {
-                    switch (found_question.type)
-                    {
-                        case "MCQ":
-                        case "MSQ":
-                            HandleClickable(found_question);
-                            break;
+            //    if (found_question == null)
+            //    {
+            //        Logger.Error("NIE DOPASOWANO PYTANIA! ODPOWIEDZ I WCIŚNIJ enter ABY KONTYNUOWAĆ..");
+            //        PrintAnswers(answers);
+            //        Console.ReadLine();
+            //        Logger.Info("Wznawianie pracy");
+            //    }
+            //    else
+            //    {
+            //        switch (found_question.type)
+            //        {
+            //            case "MCQ":
+            //            case "MSQ":
+            //                HandleClickable(found_question);
+            //                break;
 
-                        case "BLANK":
-                            HandleInsert(found_question);
-                            break;
+            //            case "BLANK":
+            //                HandleInsert(found_question);
+            //                break;
 
-                        case "OPEN":
-                            Logger.Warn("OTWARTE PYTANIE. Wciśnij enter NA NASTĘPNYM PYTANIU");
-                            Console.ReadLine();
-                            Logger.Info("Wznawianie pracy");
-                            break;
-                    }
+            //            case "OPEN":
+            //                Logger.Warn("OTWARTE PYTANIE. Wciśnij enter NA NASTĘPNYM PYTANIU");
+            //                Console.ReadLine();
+            //                Logger.Info("Wznawianie pracy");
+            //                break;
+            //        }
 
-                }
-                if (config.rush_quiz)
-                    WaitUntilInsisible(".dummy-content");
-            }
+            //    }
+            //    if (config.rush_quiz)
+            //        WaitUntilInsisible(".dummy-content");
+            //}
 
             Logger.Warn("Koniec :)");
             new ManualResetEvent(false).WaitOne();
@@ -191,16 +227,9 @@ namespace Quizbot
 
                 case QuizizzHelper.MULTI_QUESTION:
                 case QuizizzHelper.SINGLE_QUESTION:
-                    List<long> adxx = new List<long>();
-                    if (question.structure.answer?.GetType() == typeof(JArray))
-                        adxx = ((JArray)question.structure.answer).ToObject<List<long>>();
-                    else
-                        adxx.Add((long)question.structure.answer);
-
-                    foreach (int adxxx in adxx)
+                    
+                    foreach (Option x in question.structure.options)
                     {
-                        Option x = question.structure.options[adxxx];
-
                         if (x.type == "text")
                             answers.Add(x.text);
                         else if (x.type == "image")
@@ -217,73 +246,72 @@ namespace Quizbot
                     break;
             }
             return answers;
-
         }
-        private static void HandleInsert(Question found_question)
+        //private static void HandleInsert(Question found_question)
+        //{
+        //    List<string> answers = GetAnswers(found_question);
+
+        //    Logger.Info($"Pytanie: {found_question.structure.query.text} - {string.Join(", ", answers)}");
+        //    Write(".typed-option-input", answers[0]);
+        //    if (!config.rush_quiz)
+        //    {
+        //        Logger.Warn("Wciśnij ENTER na nastepnym pytaniu");
+        //        Console.ReadLine();
+        //    }
+        //    else
+        //    {
+        //        Wait(".submit-button");
+        //        Click(".submit-button");
+        //    }
+        //}
+
+        //private static void HandleClickable(Question found_question)
+        //{
+        //    List<string> answers = new List<string>(GetAnswers(found_question));
+
+        //    Logger.Info($"Pytanie: {found_question.structure.query.text} - {string.Join(", ", answers)}");
+
+        //    foreach (IWebElement e in driver.FindElement(By.CssSelector(".options-container")).FindElements(By.CssSelector(".option")))
+        //    {
+        //        try
+        //        {
+        //            if (answers.Contains(e.FindElement(By.CssSelector(".resizeable")).GetAttribute("innerHTML")))
+        //            {
+        //                Logger.Info($"Zaznaczono tekst: {e.FindElement(By.CssSelector(".resizeable")).GetAttribute("innerHTML")}");
+        //                e.Click();
+        //            }
+        //        }
+        //        catch (NoSuchElementException) //Obraz
+        //        {
+        //            foreach (string x in answers)
+        //            {
+        //                if (e.FindElement(By.CssSelector(".option-image")).GetAttribute("style").ToLower().Contains(x))
+        //                {
+        //                    Logger.Info($"Zaznaczono obrazek: {x}");
+        //                    e.Click();
+        //                }
+        //            }
+        //        }
+        //    }
+
+        //    if (found_question.type == QuizizzHelper.MULTI_QUESTION)
+        //    {
+        //        Wait(".submit-button");
+        //        Click(".submit-button");
+        //    }
+
+
+        //    if (!config.rush_quiz)
+        //    {
+        //        int x = random.Next(10, 15);
+        //        Logger.Debug($"Oczekiwanie {x} sekund");
+        //        Thread.Sleep(TimeSpan.FromSeconds(x));
+        //    }
+        //}
+
+        private static void PrintAnswers(Room a, bool tofile = false)
         {
-            List<string> answers = GetAnswers(found_question);
-
-            Logger.Info($"Pytanie: {found_question.structure.query.text} - {string.Join(", ", answers)}");
-            Write(".typed-option-input", answers[0]);
-            if (!config.rush_quiz)
-            {
-                Logger.Warn("Wciśnij ENTER na nastepnym pytaniu");
-                Console.ReadLine();
-            }
-            else
-            {
-                Wait(".submit-button");
-                Click(".submit-button");
-            }
-        }
-
-        private static void HandleClickable(Question found_question)
-        {
-            List<string> answers = new List<string>(GetAnswers(found_question));
-
-            Logger.Info($"Pytanie: {found_question.structure.query.text} - {string.Join(", ", answers)}");
-
-            foreach (IWebElement e in driver.FindElement(By.CssSelector(".options-container")).FindElements(By.CssSelector(".option")))
-            {
-                try
-                {
-                    if (answers.Contains(e.FindElement(By.CssSelector(".resizeable")).GetAttribute("innerHTML")))
-                    {
-                        Logger.Info($"Zaznaczono tekst: {e.FindElement(By.CssSelector(".resizeable")).GetAttribute("innerHTML")}");
-                        e.Click();
-                    }
-                }
-                catch (NoSuchElementException) //Obraz
-                {
-                    foreach (string x in answers)
-                    {
-                        if (e.FindElement(By.CssSelector(".option-image")).GetAttribute("style").ToLower().Contains(x))
-                        {
-                            Logger.Info($"Zaznaczono obrazek: {x}");
-                            e.Click();
-                        }
-                    }
-                }
-            }
-
-            if (found_question.type == QuizizzHelper.MULTI_QUESTION)
-            {
-                Wait(".submit-button");
-                Click(".submit-button");
-            }
-
-
-            if (!config.rush_quiz)
-            {
-                int x = random.Next(10, 15);
-                Logger.Debug($"Oczekiwanie {x} sekund");
-                Thread.Sleep(TimeSpan.FromSeconds(x));
-            }
-        }
-
-        private static void PrintAnswers(AnswersRoot a, bool tofile = false)
-        {
-            string filename = $"odpowiedzi/QUIZIZZ_ODPOWIEDZI_{new Regex("[^a-zA-Z0-9\\.\\-]").Replace(a.data.quiz.info.name, "_")}.html";
+            string filename = $"odpowiedzi/QUIZIZZ_ODPOWIEDZI_{new Regex("[^a-zA-Z0-9\\.\\-]").Replace(a.name, "_")}.html";
             string p = "" +
                 "<!DOCTYPE html>" +
                 "<html>" +
@@ -293,7 +321,7 @@ namespace Quizbot
                 "</head>" +
                 "<body>";
 
-            foreach (Question q in a.data.quiz.info.questions)
+            foreach (Question q in a.questions.Values)
             {
                 Logger.Info(q.structure.query.text);
                 p += $"<b>{q.structure.query.text}</b>: {string.Join(", ", GetAnswers(q))}\n<hr>\n";
